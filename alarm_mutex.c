@@ -23,7 +23,8 @@ void * alarm_thread (void *arg)
   int status;
 
   while(1) {
-    
+    /* 如果该互斥量被锁住了，那么该语句阻塞运行； */
+    /* 互斥量保证了两个线程临界段代码的串行运行 */
     status = pthread_mutex_lock(&alarm_mutex);
     if (status !=0)
       err_abort(status,"Lock mutex");
