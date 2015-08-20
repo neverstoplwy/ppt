@@ -1,5 +1,7 @@
 /*该程序用一个线程来实现闹钟 */
-/* 主线程将“闹钟”数据结构放入到工作链表中，工作线程读取链表,主线程和工作线程通过静态的互斥量控制对链表的访问 */
+/*主线程将“闹钟”数据结构放入到工作链表中，工作线程读取链表,主线程和工作线程通过静态的互斥量控制对链表的访问 */
+/* main返回时，线程『蒸发』 */
+/* 存在的问题 */
 #include "pthread.h"
 #include "errors.h"
 #include "time.h"
@@ -21,20 +23,56 @@ void * alarm_thread (void *arg)
   int status;
 
   while(1) {
+    
     status = pthread_mutex_lock(&alarm_mutex);
     if (status !=0)
       err_abort(status,"Lock mutex");
+    
     alarm = alarm_list;
+    if (alarm == NULL)
+      sleep_time = 1;
+    else {
+      alarm_list = alarm->link;
+      now = time (NULL);
+      if (alarm->time <= now)
+        sleep_time = 0;
+      else
+        /* 在睡眠的时候收不到主线程新来的请求，如果睡了10s，而主线程立即增加了个2s后的闹钟，则不能响应 */
+        sleep_time = alarm->time - now;
+
+      /* 在编译的时候使用 gcc -DDEBUG alarm_mutex.c可以输出调试信息 */
+#ifdef DEBUG
+      printf("[waiting: %d(%d)\"%s\"]\n", alarm->time, sleep_time, alarm->message);
+#endif
+    }
+
+    status = pthread_mutex_unlock (&alarm_mutex);
+    if (status !=0)
+      err_abort (status, "Unlock mutex");
+
+    if (sleep_time >0)
+      sleep (sleep_time);
+    else
+      /* 这个函数可以使用另一个级别等于或高于当前线程的线程先运行。
+         如果没有符合条件的线程，那么这个函数将会立刻返回然后继续执行当前线程的程序。 */
+      sched_yield ();
+
+    if (alarm != NULL) {
+      printf ("(%d) %s\n", alarm->seconds, alarm->message);
+      free (alarm);
+    }
   }
 }
 int main(int argc, char * argv[])
 {
+  int status;
   char line[128];
-  /* 注意这里用一个指向指针的指针来表示链表，不使用的话alarm_list的值得不到更新 */
-  /* 对链表进行操作：alarm_list表示一个不变的链表，而申请last代表的是一个『链表变量』，尤其是在排序插入时，所以要用指向链表的指针 */
-  alarm_t *alarm;               /* 代表要加入到链表的新建立的节点 */
-  alarm_t **last;               /* 代表什么 指当前的链表？为什么用指针的指针*/
-  alarm_t *next;                /* 代表什么 */
+  alarm_t *alarm, **last, *next; 
+  pthread_t thread;
+
+  status = pthread_create(&thread,NULL,alarm_thread,NULL);
+  if (status != 0)
+    err_abort (status,"Create alarm thread");
 
   while (1)
     {
@@ -52,6 +90,10 @@ int main(int argc, char * argv[])
         free (alarm);
       }
       else {
+        status = pthread_mutex_lock(&alarm_mutex);
+        if (status != 0)
+          err_abort(status,"Lock mutex");
+        
         /* 返回1970到当前的秒数 */
         alarm->time = time (NULL) + alarm->seconds;
 
@@ -75,12 +117,20 @@ int main(int argc, char * argv[])
           *last = alarm;        /* last = &alarm 是错误的 */
           alarm->link = NULL;
         }
-      }
+#ifdef DEBUG
+        printf("[list: ");
+        for (next = alarm_list; next != NULL;next = next->link)
+          printf ("%d(%d)[\"%s\"]",next->time,next->time - time(NULL),next->message);
+        printf ("]\n");
+#endif
+        status = pthread_mutex_unlock(&alarm_mutex);
+        if (status != 0)
+          err_abort (status, "Unlock mutex");
       
-      /* 输出链表的值，用来测试使用 */
-      for (alarm_t *p = alarm_list; p!= NULL; p = p->link) {
-        printf("时间:%s   信息:%s",ctime(&p->time),p->message);
-        printf("\n\n");
+        /* 输出链表的值，用来测试使用 */
+        /* for (alarm_t *p = alarm_list; p!= NULL; p = p->link) { */
+        /*   printf("时间:%s   信息:%s",ctime(&p->time),p->message); */
+        /*   printf("\n\n"); */
       }
     }
   return 0;
